@@ -1,0 +1,147 @@
+---
+title: "Relative Resilience Calculations"
+author: "Socheata Hour"
+date: "January 15, 2025"
+output:
+  html_document: default
+  md_document: default
+  pdf_document: default   
+  citation_package: biblatex
+bibliography: relative_resilience_reference_code.bib
+---
+
+## References 
+@eichristenson_eichristensonstacy-ceballos-index_2023
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+renv::init()
+
+## Load necessary packages
+```{r}
+install.packages("readxl",repos = "http://cran.us.r-project.org")
+install.packages("DescTools",repos = "http://cran.us.r-project.org")
+install.packages("ggplot2",repos = "http://cran.us.r-project.org")
+```
+
+## Load the library package 
+```{r}
+library("readxl") 
+library("DescTools")
+library("ggplot2")
+```
+
+
+## How to use this code? 
++ replace your file name 
++ replace your sheet name
++ replace your limits of interest (hour post-infection)
++ run the code 
+
+## Read in your data to the R environment from excel using Import Dataset function and perform RR calculation 
+`the imported excel sheet and the result table will be display after you run the code`
+
+Data should be in the following format in excel:
+
+hpi=Hours post infection, abs=absorbance at 600nm
+
+| time.hpi | ctrl.abs | virus1.abs | virus2.abs |
+|----------|----------|------------|------------|
+| 0        | 0.2      | 0.2        | 0.2        | 
+| 2        | 0.4      | 0.3        | 0.35       |
+```{r}
+current_directory <- getwd()         # Find your file path at the R console by getwd()
+current_directory
+file_name = "example_data.xlsx"      # Replace your file name 
+file_path <- file.path(current_directory, file_name)
+sheet_name <- "Sheet1"               # Replace with your sheet name 
+
+# Read in your data to the R environment from excel 
+data <- read_excel(file_path, sheet = sheet_name)
+
+# Replace the time.hpi limits
+# Default: the entire growth curve
+limited_row <- 1:nrow(data)          # default hpi (e.g., from 0hpi to 192hpi)
+
+custom_limits <- TRUE                # *** TRUE for custom limits, FALSE for the default limits ***  
+if (custom_limits) {
+  limited_row <- 4:28                # Replace with hpi of interested (e.g., at index 4 (18hpi), index 28 (162hpi))
+}
+
+filtered_data <- data[limited_row,] 
+
+# time.hpi difference between ith and i+1th
+time_diff <- sapply(1:(nrow(filtered_data)-1), function(i) filtered_data$time.hpi[i+1]-filtered_data$time.hpi[i])
+# AUC for each time.hpi 
+each_auc_con <- sapply(1:(nrow(filtered_data)-1), function(i) AUC(filtered_data$time.hpi[i:(i+1)], filtered_data$ctrl.abs[i:(i + 1)]))
+each_auc_1 <- sapply(1:(nrow(filtered_data)-1), function(i) AUC(filtered_data$time.hpi[i:(i+1)], filtered_data$virus1.abs[i:(i + 1)]))
+each_auc_2 <- sapply(1:(nrow(filtered_data)-1), function(i) AUC(filtered_data$time.hpi[i:(i+1)], filtered_data$virus2.abs[i:(i + 1)]))
+
+# Construct a results table and store the calculation value to this table
+results <- data.frame(
+  time_diff = time_diff,
+  # AUC 
+  auc_con = cumsum(each_auc_con),
+  auc_1 = cumsum(each_auc_1),
+  auc_2 = cumsum(each_auc_2),
+  # Nasymptote
+  Nasym_con = sapply(1:(nrow(filtered_data)-1), function(i) max(filtered_data$ctrl.abs[1:i])),
+  Nasym_1 = sapply(1:(nrow(filtered_data)-1), function(i) max(filtered_data$virus1.abs[1:i])),
+  Nasym_2 = sapply(1:(nrow(filtered_data)-1), function(i) max(filtered_data$virus2.abs[1:i]))
+)
+# PImax
+results$PImax_1 <- (1-results$Nasym_1/results$Nasym_con)*100
+results$PImax_2 <- (1-results$Nasym_2/results$Nasym_con)*100
+# PIauc
+results$PIauc_1 <- (1-results$auc_1/results$auc_con)*100
+results$PIauc_2 <- (1-results$auc_2/results$auc_con)*100
+# Isc
+results$Isc_1 <- sqrt(abs(results$PIauc_1)*abs(results$PImax_1))
+results$Isc_2 <- sqrt(abs(results$PIauc_2)*abs(results$PImax_2))
+# VR
+each_VR_1 <- sapply(1:(nrow(filtered_data)-1), function(i) (results$Isc_1[i+1]+results$Isc_1[i])/2*(results$time_diff[i])/(filtered_data$time.hpi[nrow(filtered_data)]-filtered_data$time.hpi[1]))
+each_VR_2 <- sapply(1:(nrow(filtered_data)-1), function(i) (results$Isc_2[i+1]+results$Isc_2[i])/2*(results$time_diff[i])/(filtered_data$time.hpi[nrow(filtered_data)]-filtered_data$time.hpi[1]))
+results$VR_1 <- cumsum(each_VR_1)
+results$VR_2 <- cumsum(each_VR_2)
+# RR
+results$RR_1 <- 1/results$VR_1
+results$RR_2 <- 1/results$VR_2
+
+# Display tables in the R console 
+filtered_data
+results
+```
+## Plot the graph 
+```{r}
+# Find the highest y value of all the dataset 
+max_y <- max(data[, !names(data) %in% "time.hpi"], na.rm = TRUE)
+
+# Create a graph 
+ggplot() + 
+  geom_line(data=data, aes(x=time.hpi, y=ctrl.abs), color="black", linewidth=1) + 
+  geom_line(data=data, aes(x=time.hpi, y=virus1.abs), color="darkblue", linewidth=1) + 
+  geom_line(data=data, aes(x=time.hpi, y=virus2.abs), color="darkred", linewidth=1) + 
+  
+  # Add the limits vertical line  
+  geom_vline(xintercept = data$time.hpi[head(limited_row,1)], linetype = "solid", color = "grey", alpha = 1, linewidth = .2) + # Replace the number to the limit of interested
+  geom_vline(xintercept = data$time.hpi[tail(limited_row,1)], linetype = "solid", color = "grey", alpha = 1, linewidth = .2) +
+  
+  theme(
+    legend.position = "none",
+    text = element_text(family = "Times New Roman", size=12, color="black"),
+    panel.background = element_blank(), 
+    panel.border = element_blank(), 
+    axis.line = element_line(color="black", linewidth=0.5), 
+    axis.text.x = element_text(angle=90, vjust=0.5, hjust=1, color="black"),
+    axis.text.y = element_text(color="black")
+  ) +
+  scale_x_continuous(expand=c(0, 0)) +
+  scale_y_continuous(expand=expansion(mult=c(0, 0)), limits=c(0.00, max_y+0.2)) +
+  labs(x="Hours Post-Infection (hpi)", y="Optical Density (OD600nm)", title="") +
+  coord_cartesian(ylim=c(0.00, max_y+0.2))
+```
+
+renv::snapshot()
